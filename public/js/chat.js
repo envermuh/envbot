@@ -1,5 +1,6 @@
 /**
- * Frontend: chat UI, typing indicator, friendly errors, and safe input handling.
+ * EnverBot UI: chat with /chat API, welcome panel, sidebar, typing, scroll.
+ * Server-side conversation memory is unchanged; "New Chat" only clears this page.
  */
 
 (function () {
@@ -9,11 +10,24 @@
   const messagesEl = document.getElementById("messages");
   const messagesScroll = document.getElementById("messages-scroll");
   const typingEl = document.getElementById("typing-indicator");
+  const welcomePanel = document.getElementById("welcome-panel");
+  const suggestedPrompts = document.getElementById("suggested-prompts");
+  const btnNewChat = document.getElementById("btn-new-chat");
+  const chatSearch = document.getElementById("chat-search");
+  const recentList = document.getElementById("recent-list");
+  const btnSettings = document.getElementById("btn-settings");
+  const settingsDialog = document.getElementById("settings-dialog");
+  const settingsBackdrop = document.getElementById("settings-dialog-backdrop");
+  const btnCloseSettings = document.getElementById("btn-close-settings");
+  const sidebar = document.getElementById("sidebar");
+  const sidebarToggle = document.getElementById("sidebar-toggle");
+  const sidebarBackdrop = document.getElementById("sidebar-backdrop");
 
   const MAX_LENGTH = 2000;
 
-  /** True while waiting for the server / AI (blocks duplicate sends). */
   let waiting = false;
+  /** After the user sends once, we hide the large welcome panel */
+  let startedChat = false;
 
   function scrollToBottom() {
     requestAnimationFrame(function () {
@@ -32,7 +46,6 @@
     scrollToBottom();
   }
 
-  /** Disable send + input while a request is in flight */
   function setWaiting(isWaiting) {
     waiting = isWaiting;
     sendBtn.disabled = isWaiting;
@@ -40,9 +53,13 @@
     form.setAttribute("aria-busy", isWaiting ? "true" : "false");
   }
 
-  /**
-   * Prefer the server’s error string; fall back to status-based friendly text.
-   */
+  function collapseWelcome() {
+    if (!startedChat && welcomePanel) {
+      startedChat = true;
+      welcomePanel.classList.add("is-collapsed");
+    }
+  }
+
   function friendlyErrorMessage(res, data) {
     if (data && typeof data.error === "string" && data.error.trim()) {
       return data.error.trim();
@@ -62,11 +79,6 @@
     return "Something went wrong. Please try again.";
   }
 
-  /**
-   * Add a message bubble (user = right, assistant = left).
-   * @param {"user" | "bot" | "error"} role
-   * @param {string} text
-   */
   function addMessage(role, text) {
     const row = document.createElement("div");
     row.className =
@@ -87,6 +99,97 @@
     scrollToBottom();
   }
 
+  /** Clears on-screen messages and shows the welcome panel again (UI only). */
+  function newChat() {
+    messagesEl.innerHTML = "";
+    startedChat = false;
+    if (welcomePanel) {
+      welcomePanel.classList.remove("is-collapsed");
+    }
+    closeSidebarMobile();
+    input.focus();
+    scrollToBottom();
+  }
+
+  function openSettings() {
+    settingsDialog.hidden = false;
+    settingsBackdrop.hidden = false;
+    btnCloseSettings.focus();
+  }
+
+  function closeSettings() {
+    settingsDialog.hidden = true;
+    settingsBackdrop.hidden = true;
+    btnSettings.focus();
+  }
+
+  function openSidebarMobile() {
+    sidebar.classList.add("is-open");
+    sidebarBackdrop.hidden = false;
+    sidebarToggle.setAttribute("aria-expanded", "true");
+  }
+
+  function closeSidebarMobile() {
+    sidebar.classList.remove("is-open");
+    sidebarBackdrop.hidden = true;
+    sidebarToggle.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleSidebarMobile() {
+    if (sidebar.classList.contains("is-open")) {
+      closeSidebarMobile();
+    } else {
+      openSidebarMobile();
+    }
+  }
+
+  /* ----- Suggested prompts: fill + send ----- */
+  if (suggestedPrompts) {
+    suggestedPrompts.addEventListener("click", function (e) {
+      const btn = e.target.closest(".suggest-chip");
+      if (!btn || waiting) return;
+      const prompt = btn.getAttribute("data-prompt");
+      if (!prompt) return;
+      input.value = prompt;
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+      } else {
+        form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      }
+    });
+  }
+
+  btnNewChat.addEventListener("click", function () {
+    if (waiting) return;
+    newChat();
+  });
+
+  /* ----- Search: filter sample recent chats ----- */
+  chatSearch.addEventListener("input", function () {
+    const q = chatSearch.value.trim().toLowerCase();
+    const items = recentList.querySelectorAll(".recent-item");
+    items.forEach(function (el) {
+      const title = (el.getAttribute("data-title") || el.textContent || "").toLowerCase();
+      el.hidden = q.length > 0 && !title.includes(q);
+    });
+  });
+
+  btnSettings.addEventListener("click", openSettings);
+  btnCloseSettings.addEventListener("click", closeSettings);
+  settingsBackdrop.addEventListener("click", closeSettings);
+
+  sidebarToggle.addEventListener("click", toggleSidebarMobile);
+  sidebarBackdrop.addEventListener("click", closeSidebarMobile);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !settingsDialog.hidden) {
+      closeSettings();
+    }
+    if (e.key === "Escape" && sidebar.classList.contains("is-open")) {
+      closeSidebarMobile();
+    }
+  });
+
   form.addEventListener("submit", async function (e) {
     e.preventDefault();
 
@@ -106,6 +209,7 @@
       return;
     }
 
+    collapseWelcome();
     addMessage("user", text);
     input.value = "";
     setWaiting(true);
@@ -151,9 +255,5 @@
     }
   });
 
-  addMessage(
-    "bot",
-    "Hi there — I’m here to help, with a bit of wit when it fits. Ask me anything, or just say hi."
-  );
   input.focus();
 })();

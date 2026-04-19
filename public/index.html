@@ -3,60 +3,194 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Chat</title>
+    <title>EnverBot — AI Assistant</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Outfit:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
-    <div class="app">
-      <header class="header">
-        <div class="header-brand">
-          <span class="logo" aria-hidden="true">◆</span>
-          <div>
-            <h1>AI Chat</h1>
-            <p class="subtitle">Messages go to your server at <code>POST /chat</code></p>
+    <!-- Skip link for keyboard users -->
+    <a class="skip-link" href="#user-input">Skip to message input</a>
+
+    <div class="dashboard">
+      <!-- Mobile sidebar toggle -->
+      <button
+        type="button"
+        class="sidebar-toggle"
+        id="sidebar-toggle"
+        aria-expanded="false"
+        aria-controls="sidebar"
+      >
+        <span class="sidebar-toggle-icon" aria-hidden="true">☰</span>
+        <span class="sr-only">Open sidebar</span>
+      </button>
+
+      <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
+      <!-- Left sidebar -->
+      <aside class="sidebar glass-panel" id="sidebar">
+        <div class="sidebar-top">
+          <div class="sidebar-brand">
+            <span class="sidebar-logo" aria-hidden="true">◇</span>
+            <span class="sidebar-brand-text">EnverBot</span>
           </div>
-        </div>
-      </header>
 
-      <main class="chat-panel">
-        <div class="messages-scroll" id="messages-scroll">
-          <div id="messages" class="messages" aria-live="polite"></div>
-
-          <div
-            id="typing-indicator"
-            class="typing-indicator"
-            hidden
-            aria-hidden="true"
-            aria-label="Assistant is typing"
-          >
-            <div class="typing-bubble" role="status">
-              <span class="typing-dot"></span>
-              <span class="typing-dot"></span>
-              <span class="typing-dot"></span>
-            </div>
-          </div>
-        </div>
-
-        <form id="chat-form" class="composer" autocomplete="off">
-          <label for="user-input" class="sr-only">Your message</label>
-          <input
-            type="text"
-            id="user-input"
-            placeholder="Message…"
-            maxlength="2000"
-            autocomplete="off"
-          />
-          <button type="submit" id="send-btn" class="send-btn">
-            <span>Send</span>
+          <button type="button" class="btn-new-chat" id="btn-new-chat">
+            <span class="btn-new-chat-icon" aria-hidden="true">+</span>
+            New Chat
           </button>
-        </form>
-      </main>
+
+          <div class="search-wrap">
+            <label for="chat-search" class="sr-only">Search chats</label>
+            <input
+              type="search"
+              id="chat-search"
+              class="search-input"
+              placeholder="Search chats…"
+              autocomplete="off"
+            />
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h2 class="sidebar-heading">Recent</h2>
+          <ul class="recent-list" id="recent-list">
+            <li>
+              <button type="button" class="recent-item" data-title="Project ideas">
+                <span class="recent-item-title">Project ideas</span>
+                <span class="recent-item-meta">Today</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="recent-item" data-title="Code review">
+                <span class="recent-item-title">Code review</span>
+                <span class="recent-item-meta">Yesterday</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="recent-item" data-title="Learning Node.js">
+                <span class="recent-item-title">Learning Node.js</span>
+                <span class="recent-item-meta">This week</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="recent-item" data-title="Weekend plan">
+                <span class="recent-item-title">Weekend plan</span>
+                <span class="recent-item-meta">This week</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div class="sidebar-footer">
+          <button type="button" class="btn-settings" id="btn-settings" aria-haspopup="dialog">
+            <span class="btn-settings-icon" aria-hidden="true">⚙</span>
+            Settings
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main chat column -->
+      <div class="main">
+        <header class="main-header">
+          <h1 class="bot-title">EnverBot</h1>
+          <p class="bot-subtitle">
+            Neural assistant · Powered by your Express server
+            <code class="inline-code">POST /chat</code>
+          </p>
+        </header>
+
+        <div class="main-body">
+          <!-- Welcome + suggestions (hidden after first user message) -->
+          <section class="welcome-panel glass-panel glow-border" id="welcome-panel">
+            <div class="welcome-inner">
+              <p class="welcome-kicker">Welcome</p>
+              <h2 class="welcome-title">How can I help you today?</h2>
+              <p class="welcome-text">
+                Ask a question, brainstorm ideas, or pick a starter below. Messages are sent to
+                your backend and answered by the AI model.
+              </p>
+              <div class="suggested-prompts" id="suggested-prompts" role="group" aria-label="Suggested prompts">
+                <button type="button" class="suggest-chip" data-prompt="Explain async/await in JavaScript like I’m new to coding.">
+                  Explain async/await simply
+                </button>
+                <button type="button" class="suggest-chip" data-prompt="Give me 5 fun weekend project ideas for a beginner developer.">
+                  Weekend project ideas
+                </button>
+                <button type="button" class="suggest-chip" data-prompt="What are 3 best practices for a secure Express API?">
+                  Secure Express API tips
+                </button>
+                <button type="button" class="suggest-chip" data-prompt="Write a short motivational message to start my coding session.">
+                  Motivation to code
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div class="chat-stack glass-panel glow-border">
+            <div class="messages-scroll" id="messages-scroll">
+              <div id="messages" class="messages" aria-live="polite"></div>
+
+              <div
+                id="typing-indicator"
+                class="typing-indicator"
+                hidden
+                aria-hidden="true"
+                aria-label="Assistant is typing"
+              >
+                <div class="typing-bubble" role="status">
+                  <span class="typing-dot"></span>
+                  <span class="typing-dot"></span>
+                  <span class="typing-dot"></span>
+                </div>
+              </div>
+            </div>
+
+            <form id="chat-form" class="composer" autocomplete="off">
+              <label for="user-input" class="sr-only">Your message</label>
+              <div class="composer-inner">
+                <input
+                  type="text"
+                  id="user-input"
+                  placeholder="Ask EnverBot anything…"
+                  maxlength="2000"
+                  autocomplete="off"
+                />
+                <button type="submit" id="send-btn" class="send-btn">
+                  <span>Send</span>
+                  <span class="send-btn-glow" aria-hidden="true"></span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Simple settings dialog (visual only; server config stays in .env) -->
+    <div
+      class="settings-dialog-backdrop"
+      id="settings-dialog-backdrop"
+      hidden
+    ></div>
+    <div
+      class="settings-dialog glass-panel glow-border"
+      id="settings-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-dialog-title"
+      hidden
+    >
+      <h2 id="settings-dialog-title" class="settings-dialog-title">Settings</h2>
+      <p class="settings-dialog-text">
+        This is a demo panel. Your API key and model live in the server
+        <code class="inline-code">.env</code> file — restart the server after changes.
+      </p>
+      <button type="button" class="btn-close-settings" id="btn-close-settings">Close</button>
     </div>
 
     <script src="js/chat.js"></script>
