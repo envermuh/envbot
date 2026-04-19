@@ -1,0 +1,25 @@
+{
+  "name": "beginner-ai-chatbot",
+  "version": "1.0.0",
+  "description": "A simple Express + HTML/CSS/JS AI chat demo",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "express",
+    "chatbot",
+    "learning"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.0",
+    "express-rate-limit": "^7.5.1",
+    "openai": "^4.104.0"
+  }
+}

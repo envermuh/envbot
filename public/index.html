@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="header-brand">
+          <span class="logo" aria-hidden="true">◆</span>
+          <div>
+            <h1>AI Chat</h1>
+            <p class="subtitle">Messages go to your server at <code>POST /chat</code></p>
+          </div>
+        </div>
+      </header>
+
+      <main class="chat-panel">
+        <div class="messages-scroll" id="messages-scroll">
+          <div id="messages" class="messages" aria-live="polite"></div>
+
+          <div
+            id="typing-indicator"
+            class="typing-indicator"
+            hidden
+            aria-hidden="true"
+            aria-label="Assistant is typing"
+          >
+            <div class="typing-bubble" role="status">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
+        </div>
+
+        <form id="chat-form" class="composer" autocomplete="off">
+          <label for="user-input" class="sr-only">Your message</label>
+          <input
+            type="text"
+            id="user-input"
+            placeholder="Message…"
+            maxlength="2000"
+            autocomplete="off"
+          />
+          <button type="submit" id="send-btn" class="send-btn">
+            <span>Send</span>
+          </button>
+        </form>
+      </main>
+    </div>
+
+    <script src="js/chat.js"></script>
+  </body>
+</html>
