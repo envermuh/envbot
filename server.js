@@ -6,6 +6,8 @@
 
 require("dotenv").config();
 
+const fetch = require("node-fetch");
+
 const express = require("express");
 const path = require("path");
 const rateLimit = require("express-rate-limit");
@@ -404,6 +406,7 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
   try {
     // Web grounding: search before answering (Tavily)
     const search = await tavilySearch(trimmed);
+    console.log("TAVILY RESULTS:", JSON.stringify(search, null, 2));
     const searchHadFailure =
       search.error === "missing_key" || search.error === "tavily_failed";
 
@@ -425,11 +428,14 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
 
     // Grounding rules: answer ONLY from search results, otherwise say you're not sure.
     const groundingRules = [
-      "You must answer using ONLY the information in the provided web search results.",
-      "Do NOT use prior knowledge. If the sources are weak/unclear or don't answer the question, say you are not sure.",
-      "Be clear and medium-length. If you make a claim, support it with a source.",
-      "Do not dump lots of links. Keep sources to 2–5 URLs when possible.",
-      "If sources disagree, mention the uncertainty briefly.",
+      "Use the provided web search results as the main factual basis for your answer.",
+      "Prefer the search results whenever they are relevant and clear.",
+      "If the search results are incomplete, you may give a cautious answer, but clearly signal uncertainty.",
+      "Do not invent facts, names, dates, or statistics.",
+      "Be clear, specific, and medium-length.",
+      "If you make a factual claim, support it with the provided sources when possible.",
+      "Keep sources to 2–5 URLs when possible.",
+      "If sources disagree, briefly mention the uncertainty."
     ].join(" ");
 
     messagesForModel.push({ role: "system", content: groundingRules });
