@@ -220,9 +220,27 @@ function computeConfidenceLabel(searchQuality, replyText) {
   ];
   const isUncertain = uncertaintySignals.some((s) => reply.includes(s));
 
-  if (searchQuality === "high" && !isUncertain) return "High";
-  if (searchQuality === "low" || isUncertain) return "Low";
-  return "Medium";
+  if (searchQuality === "high" && !isUncertain) return "high";
+  if (searchQuality === "low" || isUncertain) return "low";
+  return "medium";
+}
+
+/** Always respond with the exact /chat shape. */
+function sendChatJson(res, payload) {
+  const reply =
+    typeof payload?.reply === "string" && payload.reply.trim()
+      ? payload.reply.trim()
+      : "I’m not sure right now. Please try again.";
+
+  const sources = Array.isArray(payload?.sources)
+    ? payload.sources.filter((u) => typeof u === "string" && u.trim()).slice(0, 5)
+    : [];
+
+  const c = String(payload?.confidence || "").toLowerCase();
+  const confidence = c === "high" || c === "medium" || c === "low" ? c : "low";
+
+  // Always 200 + always valid JSON
+  return res.status(200).json({ reply, sources, confidence });
 }
 
 async function readUserProfile(sessionId) {
@@ -345,29 +363,37 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
       : "anonymous";
 
   if (!message || typeof message !== "string") {
-    return res.status(400).json({
-      error:
-        "That message didn’t come through correctly. Please type something and send again.",
+    return sendChatJson(res, {
+      reply:
+        "I didn’t receive a readable message. Please type your question again.",
+      sources: [],
+      confidence: "low",
     });
   }
 
   if (message.length > MAX_MESSAGE_LENGTH) {
-    return res.status(400).json({
-      error: `Please keep messages under ${MAX_MESSAGE_LENGTH} characters.`,
+    return sendChatJson(res, {
+      reply: `Please keep messages under ${MAX_MESSAGE_LENGTH} characters.`,
+      sources: [],
+      confidence: "low",
     });
   }
 
   const trimmed = message.trim();
   if (!trimmed) {
-    return res.status(400).json({
-      error: "Messages can’t be empty. Type something first.",
+    return sendChatJson(res, {
+      reply: "Messages can’t be empty. Type something first.",
+      sources: [],
+      confidence: "low",
     });
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    return res.status(503).json({
-      error:
-        "The server isn’t configured with an AI API key yet. Add OPENAI_API_KEY to your .env file and restart.",
+    return sendChatJson(res, {
+      reply:
+        "The server is missing an OpenAI API key (OPENAI_API_KEY). Add it to your .env file and restart the server.",
+      sources: [],
+      confidence: "low",
     });
   }
 
@@ -378,12 +404,8 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
   try {
     // Web grounding: search before answering (Tavily)
     const search = await tavilySearch(trimmed);
-    if (search.error === "missing_key") {
-      return res.status(503).json({
-        error:
-          "Tavily web search is not configured. Add TAVILY_API_KEY to your .env file and restart the server.",
-      });
-    }
+    const searchHadFailure =
+      search.error === "missing_key" || search.error === "tavily_failed";
 
     // Persistent profile memory: if user says "my name is X", store it by session_id
     const extractedName = extractNameFromMessage(trimmed);
@@ -432,7 +454,7 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
     });
 
     // If the web results look weak, make the model explicitly cautious.
-    if (search.searchQuality === "low") {
+    if (search.searchQuality === "low" || searchHadFailure) {
       messagesForModel.push({
         role: "system",
         content:
@@ -451,7 +473,7 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
 
     const reply =
       completion.choices[0]?.message?.content?.trim() ||
-      "The model returned an empty reply.";
+      "I’m not sure right now. Please try again.";
 
     const afterAssistant = trimmedHistory.concat([
       { role: "assistant", content: reply },
@@ -459,13 +481,18 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
     conversationBySession.set(sessionId, trimHistory(afterAssistant));
 
     const sources = pickSourceLinks(search.results);
-    const confidence = computeConfidenceLabel(search.searchQuality, reply);
-    return res.json({ reply, sources, confidence });
+    const confidenceLabel = computeConfidenceLabel(search.searchQuality, reply);
+    const confidence = String(confidenceLabel || "").toLowerCase();
+    return sendChatJson(res, { reply, sources, confidence });
   } catch (err) {
     conversationBySession.set(sessionId, historySnapshot);
-    const { http, message } = friendlyOpenAiError(err);
+    const { message } = friendlyOpenAiError(err);
     console.error("Chat / OpenAI error:", err?.message || err);
-    return res.status(http).json({ error: message });
+    return sendChatJson(res, {
+      reply: message || "I’m not sure right now. Please try again.",
+      sources: [],
+      confidence: "low",
+    });
   }
 });
 

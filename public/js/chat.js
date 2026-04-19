@@ -43,7 +43,7 @@
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
       id = window.crypto.randomUUID();
     } else {
-      id = String(Date.now()) + \"-\" + String(Math.random()).slice(2);
+      id = String(Date.now()) + "-" + String(Math.random()).slice(2);
     }
     localStorage.setItem(key, id);
     return id;
