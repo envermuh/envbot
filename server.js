@@ -59,6 +59,7 @@ const supabase =
 
 // Default model: cheap and capable; override with OPENAI_MODEL in .env
 const CHAT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
 /**
  * System message: shapes tone and behavior (personality).
@@ -102,6 +103,61 @@ function extractNameFromMessage(text) {
   // Keep names small and safe (basic beginner-friendly constraint)
   if (name.length > 60) return null;
   return name;
+}
+
+/**
+ * Tavily web search (grounding).
+ * We keep it small + simple: top 3–5 results with title + url + snippet.
+ */
+async function tavilySearch(query) {
+  if (!TAVILY_API_KEY) {
+    return { results: [], weak: true, error: "missing_key" };
+  }
+
+  const resp = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TAVILY_API_KEY,
+      query,
+      search_depth: "basic",
+      max_results: 5,
+      include_answer: false,
+      include_images: false,
+      include_raw_content: false,
+    }),
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    console.error("Tavily error:", data?.message || `HTTP ${resp.status}`);
+    return { results: [], weak: true, error: "tavily_failed" };
+  }
+
+  const raw = Array.isArray(data?.results) ? data.results : [];
+  const results = raw
+    .filter((r) => r && r.url && r.title)
+    .slice(0, 5)
+    .map((r, idx) => ({
+      idx: idx + 1,
+      title: String(r.title).trim(),
+      url: String(r.url).trim(),
+      snippet: String(r.content || r.snippet || "").trim(),
+      score: typeof r.score === "number" ? r.score : null,
+    }))
+    .filter((r) => r.title && r.url);
+
+  const weak = results.length < 3;
+  return { results, weak, error: null };
+}
+
+function formatSearchContext(results) {
+  return results
+    .map((r) => {
+      const snippet = r.snippet ? `Snippet: ${r.snippet}` : "Snippet: (none)";
+      return `[${r.idx}] ${r.title}\nURL: ${r.url}\n${snippet}`;
+    })
+    .join("\n\n");
 }
 
 async function readUserProfile(sessionId) {
@@ -232,6 +288,15 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
   const historySnapshot = conversationHistory.slice();
 
   try {
+    // Web grounding: search before answering (Tavily)
+    const search = await tavilySearch(trimmed);
+    if (search.error === "missing_key") {
+      return res.status(503).json({
+        error:
+          "Tavily web search is not configured. Add TAVILY_API_KEY to your .env file and restart the server.",
+      });
+    }
+
     // Persistent profile memory: if user says "my name is X", store it by session_id
     const extractedName = extractNameFromMessage(trimmed);
     if (extractedName) {
@@ -248,6 +313,17 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
     // System message is always first and is not part of history (so it is never trimmed away)
     const messagesForModel = [{ role: "system", content: SYSTEM_PROMPT }];
 
+    // Grounding rules: answer ONLY from search results, otherwise say you're not sure.
+    const groundingRules = [
+      "You must answer using ONLY the information in the provided web search results.",
+      "Do NOT use prior knowledge. If the sources are weak/unclear or don't answer the question, say you are not sure.",
+      "Be clear and medium-length. If you make a claim, support it with a source.",
+      "When possible, include a short 'Sources' section listing the URLs you used.",
+      "If sources disagree, mention the uncertainty briefly.",
+    ].join(" ");
+
+    messagesForModel.push({ role: "system", content: groundingRules });
+
     // Add persistent profile memory as an extra system hint (simple + safe)
     if (profile?.name) {
       messagesForModel.push({
@@ -258,6 +334,16 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
       });
     }
 
+    // Add the search results as context for the model
+    const searchContext = formatSearchContext(search.results);
+    messagesForModel.push({
+      role: "system",
+      content:
+        "Web search results (use these as your only source of factual information):\n\n" +
+        (searchContext || "(no results)"),
+    });
+
+    // Conversation history helps with continuity, but grounding rules still apply.
     messagesForModel.push(...trimmedHistory);
 
     const completion = await openai.chat.completions.create({
