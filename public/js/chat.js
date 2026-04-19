@@ -101,7 +101,11 @@
     return "Something went wrong. Please try again.";
   }
 
-  function addMessage(role, text) {
+  /**
+   * Add a message bubble.
+   * Optional extras for assistant messages: sources + confidence.
+   */
+  function addMessage(role, text, options) {
     const row = document.createElement("div");
     row.className =
       "msg-row msg-row--" +
@@ -117,20 +121,91 @@
     bubble.textContent = text;
 
     row.appendChild(bubble);
+
+    // Clean, compact transparency section under assistant answers
+    if (role === "bot" && options && (options.sources || options.confidence)) {
+      const meta = document.createElement("div");
+      meta.className = "msg-meta";
+
+      const badge = document.createElement("span");
+      const c = String(options.confidence || "").toLowerCase();
+      const label = c === "high" ? "High" : c === "medium" ? "Medium" : "Low";
+      badge.className =
+        "confidence-badge " +
+        (label === "High"
+          ? "confidence-badge--high"
+          : label === "Medium"
+            ? "confidence-badge--medium"
+            : "confidence-badge--low");
+      badge.textContent = "Confidence: " + label;
+      meta.appendChild(badge);
+
+      const sources = Array.isArray(options.sources) ? options.sources : [];
+      if (sources.length) {
+        const label = document.createElement("div");
+        label.className = "msg-sources-label";
+        label.textContent = "Sources";
+        meta.appendChild(label);
+
+        const list = document.createElement("div");
+        list.className = "msg-sources";
+
+        // Keep UI clean: show 2–5 links max
+        sources.slice(0, 5).forEach(function (url) {
+          const a = document.createElement("a");
+          a.className = "msg-source-link";
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noreferrer noopener";
+          a.textContent = url;
+          list.appendChild(a);
+        });
+
+        meta.appendChild(list);
+      } else {
+        const lowNote = document.createElement("div");
+        lowNote.className = "msg-low-sources";
+        lowNote.textContent = "Sources were limited — confidence may be low.";
+        meta.appendChild(lowNote);
+      }
+
+      row.appendChild(meta);
+    }
+
     messagesEl.appendChild(row);
     scrollToBottom();
   }
 
-  /** Clears on-screen messages and shows the welcome panel again (UI only). */
-  function newChat() {
-    messagesEl.innerHTML = "";
-    startedChat = false;
-    if (welcomePanel) {
-      welcomePanel.classList.remove("is-collapsed");
+  /**
+   * Clears on-screen messages, tells the backend to reset memory,
+   * and shows the welcome panel again.
+   */
+  async function newChat() {
+    if (waiting) return;
+    setWaiting(true);
+    setTyping(false);
+
+    try {
+      // Reset backend memory for this session_id
+      await fetch("/new-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      }).catch(function () {
+        // If this fails, we still reset the UI so the app feels responsive.
+      });
+    } finally {
+      // Always reset the UI
+      messagesEl.innerHTML = "";
+      startedChat = false;
+      if (welcomePanel) {
+        welcomePanel.classList.remove("is-collapsed");
+      }
+      closeSidebarMobile();
+      setWaiting(false);
+      input.focus();
+      scrollToBottom();
     }
-    closeSidebarMobile();
-    input.focus();
-    scrollToBottom();
   }
 
   function openSettings() {
@@ -182,7 +257,6 @@
   }
 
   btnNewChat.addEventListener("click", function () {
-    if (waiting) return;
     newChat();
   });
 
@@ -257,7 +331,10 @@
       }
 
       if (data.reply && typeof data.reply === "string") {
-        addMessage("bot", data.reply);
+        addMessage("bot", data.reply, {
+          sources: data.sources,
+          confidence: data.confidence,
+        });
       } else {
         addMessage(
           "error",

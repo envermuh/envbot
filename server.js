@@ -39,6 +39,17 @@ const chatRateLimiter = rateLimit({
   },
 });
 
+// Smaller limiter for "utility" endpoints like /new-chat
+const utilityRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: function (req, res) {
+    res.status(429).json({ error: "Too many requests. Please slow down." });
+  },
+});
+
 // OpenAI client — reads OPENAI_API_KEY from process.env (set in .env)
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -148,7 +159,17 @@ async function tavilySearch(query) {
     .filter((r) => r.title && r.url);
 
   const weak = results.length < 3;
-  return { results, weak, error: null };
+
+  // Search quality heuristic (simple + explainable):
+  // - Strong snippets suggest the result has usable context.
+  // - More results generally = more corroboration.
+  const strongSnippets = results.filter((r) => (r.snippet || "").length >= 80).length;
+
+  let searchQuality = "low";
+  if (results.length >= 4 && strongSnippets >= 3) searchQuality = "high";
+  else if (results.length >= 3 && strongSnippets >= 2) searchQuality = "medium";
+
+  return { results, weak, searchQuality, error: null };
 }
 
 function formatSearchContext(results) {
@@ -158,6 +179,50 @@ function formatSearchContext(results) {
       return `[${r.idx}] ${r.title}\nURL: ${r.url}\n${snippet}`;
     })
     .join("\n\n");
+}
+
+function pickSourceLinks(results) {
+  // Keep it clean: return 2–5 unique URLs (top-first)
+  const urls = [];
+  for (const r of results) {
+    if (!r?.url) continue;
+    if (!urls.includes(r.url)) urls.push(r.url);
+    if (urls.length >= 5) break;
+  }
+  // Prefer at least 2, but don't invent sources
+  return urls.slice(0, Math.max(2, Math.min(5, urls.length)));
+}
+
+/**
+ * Confidence badge (High/Medium/Low) based on:
+ * - searchQuality (from Tavily result depth/snippets)
+ * - answer certainty (simple hedge-word check in the reply)
+ */
+function computeConfidenceLabel(searchQuality, replyText) {
+  const reply = String(replyText || "").toLowerCase();
+
+  // If the model is explicitly uncertain, cap confidence.
+  const uncertaintySignals = [
+    "i'm not sure",
+    "i am not sure",
+    "not sure",
+    "uncertain",
+    "i can't confirm",
+    "cannot confirm",
+    "hard to tell",
+    "unclear",
+    "might be",
+    "may be",
+    "it depends",
+    "no strong sources",
+    "sources are limited",
+    "limited sources",
+  ];
+  const isUncertain = uncertaintySignals.some((s) => reply.includes(s));
+
+  if (searchQuality === "high" && !isUncertain) return "High";
+  if (searchQuality === "low" || isUncertain) return "Low";
+  return "Medium";
 }
 
 async function readUserProfile(sessionId) {
@@ -244,6 +309,29 @@ function friendlyOpenAiError(err) {
 }
 
 /**
+ * POST /new-chat
+ * Body: { "session_id": "..." }
+ * Clears ONLY the in-memory conversation for this session_id (fresh chat).
+ * Does not delete Supabase profile memory (name).
+ */
+app.post("/new-chat", utilityRateLimiter, (req, res) => {
+  const sessionIdRaw = req.body?.session_id;
+  const sessionId =
+    typeof sessionIdRaw === "string" && sessionIdRaw.trim()
+      ? sessionIdRaw.trim().slice(0, 100)
+      : null;
+
+  if (!sessionId) {
+    return res.status(400).json({
+      error: 'Please send JSON like { "session_id": "..." }',
+    });
+  }
+
+  conversationBySession.delete(sessionId);
+  return res.json({ ok: true });
+});
+
+/**
  * POST /chat
  * Body: { "message": "user text here" }
  * Response: { "reply": "..." } or { "error": "..." }
@@ -318,7 +406,7 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
       "You must answer using ONLY the information in the provided web search results.",
       "Do NOT use prior knowledge. If the sources are weak/unclear or don't answer the question, say you are not sure.",
       "Be clear and medium-length. If you make a claim, support it with a source.",
-      "When possible, include a short 'Sources' section listing the URLs you used.",
+      "Do not dump lots of links. Keep sources to 2–5 URLs when possible.",
       "If sources disagree, mention the uncertainty briefly.",
     ].join(" ");
 
@@ -343,6 +431,15 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
         (searchContext || "(no results)"),
     });
 
+    // If the web results look weak, make the model explicitly cautious.
+    if (search.searchQuality === "low") {
+      messagesForModel.push({
+        role: "system",
+        content:
+          "Search confidence is LOW. Be explicit about uncertainty and avoid making strong claims.",
+      });
+    }
+
     // Conversation history helps with continuity, but grounding rules still apply.
     messagesForModel.push(...trimmedHistory);
 
@@ -361,7 +458,9 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
     ]);
     conversationBySession.set(sessionId, trimHistory(afterAssistant));
 
-    return res.json({ reply });
+    const sources = pickSourceLinks(search.results);
+    const confidence = computeConfidenceLabel(search.searchQuality, reply);
+    return res.json({ reply, sources, confidence });
   } catch (err) {
     conversationBySession.set(sessionId, historySnapshot);
     const { http, message } = friendlyOpenAiError(err);
