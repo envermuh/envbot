@@ -29,6 +29,28 @@
   /** After the user sends once, we hide the large welcome panel */
   let startedChat = false;
 
+  /**
+   * session_id:
+   * A simple browser-stored ID so the server can attach persistent memory
+   * (like your name) to this device/session. Stored in localStorage.
+   */
+  function getSessionId() {
+    const key = "enverbot_session_id";
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+
+    let id = "";
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      id = window.crypto.randomUUID();
+    } else {
+      id = String(Date.now()) + \"-\" + String(Math.random()).slice(2);
+    }
+    localStorage.setItem(key, id);
+    return id;
+  }
+
+  const sessionId = getSessionId();
+
   function scrollToBottom() {
     requestAnimationFrame(function () {
       messagesScroll.scrollTop = messagesScroll.scrollHeight;
@@ -219,7 +241,7 @@
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, session_id: sessionId }),
       });
 
       let data = {};

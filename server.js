@@ -10,6 +10,7 @@ const express = require("express");
 const path = require("path");
 const rateLimit = require("express-rate-limit");
 const OpenAI = require("openai");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,6 +44,19 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+/**
+ * Supabase client (for persistent memory)
+ * Reads these from .env:
+ * - SUPABASE_URL
+ * - SUPABASE_SECRET_KEY  (service role key; keep it server-side only)
+ */
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+const supabase =
+  supabaseUrl && supabaseSecretKey
+    ? createClient(supabaseUrl, supabaseSecretKey)
+    : null;
+
 // Default model: cheap and capable; override with OPENAI_MODEL in .env
 const CHAT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
@@ -61,14 +75,63 @@ const SYSTEM_PROMPT = [
 const MAX_MESSAGES = 12;
 
 /**
- * Only user/assistant turns live here — never the system message, so personality stays intact.
- * Trimmed after each update so this array never grows past MAX_MESSAGES.
+ * In-memory conversation history (per session_id).
+ * Note: this is NOT persistent; it resets when the server restarts.
+ * Supabase is used below for persistent profile memory (name, etc.).
  */
-let conversationHistory = [];
+const conversationBySession = new Map();
+
+function getConversation(sessionId) {
+  if (!conversationBySession.has(sessionId)) {
+    conversationBySession.set(sessionId, []);
+  }
+  return conversationBySession.get(sessionId);
+}
 
 /** Keep only the newest turns so the array never grows beyond MAX_MESSAGES. */
-function trimHistory() {
-  conversationHistory = conversationHistory.slice(-MAX_MESSAGES);
+function trimHistory(conversation) {
+  return conversation.slice(-MAX_MESSAGES);
+}
+
+/** Extract a name from messages like: "my name is X" */
+function extractNameFromMessage(text) {
+  const m = text.match(/\bmy\s+name\s+is\s+(.+?)\s*$/i);
+  if (!m) return null;
+  const name = m[1].trim();
+  if (!name) return null;
+  // Keep names small and safe (basic beginner-friendly constraint)
+  if (name.length > 60) return null;
+  return name;
+}
+
+async function readUserProfile(sessionId) {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("user_profiles")
+    .select("session_id,name,updated_at")
+    .eq("session_id", sessionId)
+    .maybeSingle();
+  if (error) {
+    // Don't fail the whole chat if Supabase is down; just log and continue.
+    console.error("Supabase readUserProfile error:", error.message || error);
+    return null;
+  }
+  return data || null;
+}
+
+async function upsertUserName(sessionId, name) {
+  if (!supabase) return;
+  const payload = {
+    session_id: sessionId,
+    name,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from("user_profiles").upsert(payload, {
+    onConflict: "session_id",
+  });
+  if (error) {
+    console.error("Supabase upsertUserName error:", error.message || error);
+  }
 }
 
 // Serve HTML, CSS, and JS from the public folder
@@ -131,6 +194,11 @@ function friendlyOpenAiError(err) {
  */
 app.post("/chat", chatRateLimiter, async (req, res) => {
   const message = req.body?.message;
+  const sessionIdRaw = req.body?.session_id;
+  const sessionId =
+    typeof sessionIdRaw === "string" && sessionIdRaw.trim()
+      ? sessionIdRaw.trim().slice(0, 100)
+      : "anonymous";
 
   if (!message || typeof message !== "string") {
     return res.status(400).json({
@@ -159,18 +227,38 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
     });
   }
 
+  const conversationHistory = getConversation(sessionId);
   // Snapshot so we can undo the user turn if the API call fails
   const historySnapshot = conversationHistory.slice();
 
   try {
-    conversationHistory.push({ role: "user", content: trimmed });
-    trimHistory();
+    // Persistent profile memory: if user says "my name is X", store it by session_id
+    const extractedName = extractNameFromMessage(trimmed);
+    if (extractedName) {
+      await upsertUserName(sessionId, extractedName);
+    }
 
-    // System message is always first and is not part of conversationHistory (so it is never trimmed away)
-    const messagesForModel = [
-      { role: "system", content: SYSTEM_PROMPT },
-      ...conversationHistory,
-    ];
+    // Load profile before responding (persistent memory)
+    const profile = await readUserProfile(sessionId);
+
+    conversationHistory.push({ role: "user", content: trimmed });
+    const trimmedHistory = trimHistory(conversationHistory);
+    conversationBySession.set(sessionId, trimmedHistory);
+
+    // System message is always first and is not part of history (so it is never trimmed away)
+    const messagesForModel = [{ role: "system", content: SYSTEM_PROMPT }];
+
+    // Add persistent profile memory as an extra system hint (simple + safe)
+    if (profile?.name) {
+      messagesForModel.push({
+        role: "system",
+        content:
+          `User profile: the user's name is ${profile.name}. ` +
+          "Use it naturally sometimes, but don't overdo it.",
+      });
+    }
+
+    messagesForModel.push(...trimmedHistory);
 
     const completion = await openai.chat.completions.create({
       model: CHAT_MODEL,
@@ -182,12 +270,14 @@ app.post("/chat", chatRateLimiter, async (req, res) => {
       completion.choices[0]?.message?.content?.trim() ||
       "The model returned an empty reply.";
 
-    conversationHistory.push({ role: "assistant", content: reply });
-    trimHistory();
+    const afterAssistant = trimmedHistory.concat([
+      { role: "assistant", content: reply },
+    ]);
+    conversationBySession.set(sessionId, trimHistory(afterAssistant));
 
     return res.json({ reply });
   } catch (err) {
-    conversationHistory = historySnapshot;
+    conversationBySession.set(sessionId, historySnapshot);
     const { http, message } = friendlyOpenAiError(err);
     console.error("Chat / OpenAI error:", err?.message || err);
     return res.status(http).json({ error: message });
@@ -202,5 +292,10 @@ app.listen(PORT, () => {
     );
   } else {
     console.log(`Using OpenAI model: ${CHAT_MODEL}\n`);
+  }
+  if (!supabase) {
+    console.warn(
+      "[Warning] Supabase is not configured. Add SUPABASE_URL and SUPABASE_SECRET_KEY to enable persistent profile memory.\n"
+    );
   }
 });
